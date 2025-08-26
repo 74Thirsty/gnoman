@@ -62,7 +62,7 @@ def _setup_logger() -> logging.Logger:  # L044
 
 logger = _setup_logger()  # L057
 
-# ───────── Splash (banner stays exactly as you had it) ─────────  # L059
+# ───────── Splash  ─────────  # L059
 def splash() -> None:  # L050
     banner = r"""  # L051
  ██████╗ ███╗   ██╗ ██████╗ ███╗   ███╗ █████╗ ███╗   ██╗
