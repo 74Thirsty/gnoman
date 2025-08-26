@@ -297,15 +297,16 @@ You’re fully armed now:
 * Safe Manager can fund, send tokens, execute tx, manage owners/threshold, and toggle the 24h guard.
 * Wallet Manager handles HD derivations, “hidden tree” paths, imports/exports, and encrypted local storage.
 
-License
+Got it — here’s a **“License” section** you can drop into your README, docs, or site. It points directly to your `LICENSE.md` (the terms you wrote) and `LICENSEE.md` (the roster or registry of who actually holds signed paper licenses). It keeps the same weighty GNOMAN vibe:
 
-GNOMAN is proprietary software. No person, entity, or organization may use, copy, or execute GNOMAN without an original paper license signed in ink by the Licensor.
+---
 
-📜 Full License Terms
- — the complete GNOMAN License Agreement.
+## License
 
-🖋 Licensed Parties
- — current holders of valid, notarized, ink-signed licenses.
+GNOMAN is **proprietary software**. No person, entity, or organization may use, copy, or execute GNOMAN without an original paper license signed in ink by the Licensor.
 
-Electronic signatures, receipts, or downloads do not constitute a license.
-If your name does not appear in the License registry, you have no rights to GNOMAN.
+* 📜 [Full License Terms](./LICENSE.md) — the complete GNOMAN License Agreement.
+* 🖋 [Licensed Parties](./LICENSEE.md) — current holders of license get this.
+
+Electronic signatures, receipts, or downloads do **not** constitute a license.
+If your name does not appear in the **LICENSEE.md** registry, you have no rights to GNOMAN.
