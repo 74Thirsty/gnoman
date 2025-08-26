@@ -446,6 +446,8 @@ def safe_exec() -> None:
     if _apply_24h_hold():
         _send_tx(tx)
         audit_log("safe_exec", {"to": to_addr, "value": value, "op": op}, True, {"hash32": "0x"+HexBytes(txh).hex()})
+
+
 # ───────── Wallet Manager (HD + hidden tree) ─────────  # L480
 class WalletCtx:
     def __init__(self) -> None:
@@ -507,6 +509,8 @@ def wal_label() -> None:
     WAL.label_file.write_text(json.dumps(WAL.labels, indent=2))
     print(f"🏷️ {addr} => {label}")
     audit_log("wallet_label", {"addr": addr, "label": label}, True, {})
+
+
 # ───────── Key Manager ─────────  # L560
 def km_add() -> None:
     key = input("Secret key (e.g., RPC_URL): ").strip()
@@ -561,6 +565,32 @@ def km_sync_env() -> None:
             except Exception: pass
     print(f"✅ Synced {len(envs)} into keyring")
     audit_log("km_sync_env", {"count": len(envs)}, True, {})
+
+# ──────────────────────────────────────────────  # L493
+# ABOUT & LICENSE                                # L494
+# ──────────────────────────────────────────────  # L495
+
+def about_menu() -> None:  # L496
+    text = """
+GNOMAN — Safe • Wallet • Keys • Hold24h
+────────────────────────────────────────
+Author & Owner : Christopher Hirschauer
+Copyright      : (c) 2025 All rights reserved.
+License        : Proprietary (see LICENSE.md)
+
+Terms
+-----
+- You may use GNOMAN only with explicit permission of the author.
+- Redistribution, modification, or resale without permission is forbidden.
+- GNOMAN is provided "AS IS" without warranty of any kind.
+- "GNOMAN" is a proprietary trademark of Christopher Hirschauer.
+
+For permissions or commercial licensing, contact:
+Christopher Hirschauer — Fort Dodge, Iowa, USA
+"""
+    print(text)
+
+
 # ───────── Menus ─────────  # L620
 def safe_menu() -> None:
     try:
@@ -678,28 +708,34 @@ def key_manager_menu() -> None:
             audit_log("key_menu_error", {"choice": ch}, False, {"error": str(e)})
             print(f"Error: {e}. See gnoman.log.")
 
-def main_menu() -> None:
-    while True:
+def main_menu() -> None:  # L496
+    while True:  # L497
         print("\n┌─ GNOMAN MAIN MENU ──────────────────────────────────────")
         print("│ 1) Safe Manager (Gnosis Safe)")
         print("│ 2) Wallet Manager (HD / hidden trees)")
         print("│ 3) Key Manager (Secrets)")
-        print("│ 0) Exit")
+        print("│ 4) About & License")
+        print("│ 5) Exit")
         print("└─────────────────────────────────────────────────────────")
         ch = input("> ").strip()
         try:
-            if ch == "1": safe_menu()
-            elif ch == "2": wallet_menu()
-            elif ch == "3": key_manager_menu()
-            elif ch == "0":
+            if ch == "1":
+                safe_menu()
+            elif ch == "2":
+                wal_menu()
+            elif ch == "3":
+                key_manager_menu()
+            elif ch == "4":
+                about_menu()
+            elif ch == "5":
                 print("👋 Goodbye.")
                 return
-            else: print("Invalid.")
+            else:
+                print("Invalid.")
         except KeyboardInterrupt:
             print("\n⚠️ Interrupted.")
         except Exception as e:
-            logger.error(f"Main menu error: {e}", exc_info=True)
-            audit_log("main_menu_error", {"choice": ch}, False, {"error": str(e)})
+            logger.error(f"💥 Main menu error: {e}", exc_info=True)
             print(f"Error: {e}. See gnoman.log.")
 
 # ───────── Entrypoint ─────────  # L720
