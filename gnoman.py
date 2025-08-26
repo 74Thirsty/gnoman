@@ -8,6 +8,19 @@ Standalone CLI for:
 - Key Manager (keyring + .env.secure mirror)
 Forensic logging: local, append-only JSONL with hash chaining.
 Secrets priority: keyring > .env.secure > env > prompt → persist to keyring + .env.secure.
+ GNOMAN — Proprietary Software
+ Copyright (c) [YEAR] [Your Name]
+
+ This software is proprietary and strictly controlled. No license exists
+ unless Licensee holds an original GNOMAN License Agreement, executed in
+ handwritten ink on physical paper and signed by the Licensor.
+
+ Possession, use, or execution of this software without such signed paper
+ license constitutes willful infringement and theft. Electronic signatures,
+ scans, digital acknowledgments, or receipts do not create a license.
+
+ All rights reserved. Unauthorized use is prohibited.
+
 """  # L010
 
 import os  # L011
