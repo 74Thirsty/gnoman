@@ -36,7 +36,7 @@ No invisible storage. No silent failures. No hidden assumptions. GNOMAN enforces
 
 # Quick start (first run)
 
-1. **Run it**
+1. **After making it executable, Run it**
 
 ```
 python3 gnosis.py
