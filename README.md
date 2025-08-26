@@ -1,5 +1,39 @@
 ![Sheen Banner](https://raw.githubusercontent.com/74Thirsty/74Thirsty/main/assets/gnoman.svg)
 
+---
+
+# GNOMAN: Guardian of Safes, Master of Keys
+
+**GNOMAN** is a standalone command-line toolkit for those who demand uncompromising control over digital assets. It’s the forge where wallets, safes, and keys are shaped into reliable, battle-tested tools.
+
+### Core Functions
+
+**1. Gnosis Safe Management**
+Direct, auditable interaction with your Safe. Deploy new vaults, set thresholds, rotate owners, propose or execute transactions—all without tangled dashboards or risky browser extensions.
+
+**2. Wallet Management**
+Generate, rotate, import, or export wallets with full HD derivation tree support. Build hidden branches, use throwaway wallets, store cold, or export JSONs. GNOMAN gives you the flexibility of hardware ecosystems while keeping you in control of the root keys.
+
+**3. Key Manager & Backup**
+Secrets are preserved with a strict order: **keyring → .env.secure → environment → prompt**. Once a key is seen, it is persisted. If one layer fails, the next holds. Backups use AES-GCM encryption for resilience without plaintext leakage.
+
+### Why GNOMAN Exists
+
+Crypto tools are often too casual (browser plugins) or too arcane (raw JSON-RPC). GNOMAN bridges the gap—terminal-native, structured, auditable, and forensic-grade. Like the gnomon of a sundial, it stands straight in chaos, casting clear lines of truth.
+
+### Features
+
+* Full Safe control: deploy, manage owners, set thresholds.
+* Wallet creation, imports, hidden derivations.
+* Key persistence and secure backups.
+* Interactive menus or fully scriptable flags.
+* Verbose debug or silent automation modes.
+
+### Security Philosophy
+
+No invisible storage. No silent failures. No hidden assumptions. GNOMAN enforces explicitness, persistence, and resilience—so your keys, safes, and actions remain under your control.
+
+
 # Quick start (first run)
 
 1. **Run it**
