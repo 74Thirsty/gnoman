@@ -1,3 +1,5 @@
+![Sheen Banner](https://raw.githubusercontent.com/74Thirsty/74Thirsty/main/assets/gnoman.svg)
+
 # Quick start (first run)
 
 1. **Run it**
