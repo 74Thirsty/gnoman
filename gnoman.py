@@ -8,19 +8,6 @@ Standalone CLI for:
 - Key Manager (keyring + .env.secure mirror)
 Forensic logging: local, append-only JSONL with hash chaining.
 Secrets priority: keyring > .env.secure > env > prompt → persist to keyring + .env.secure.
- GNOMAN — Proprietary Software
- Copyright (c) [YEAR] [Your Name]
-
- This software is proprietary and strictly controlled. No license exists
- unless Licensee holds an original GNOMAN License Agreement, executed in
- handwritten ink on physical paper and signed by the Licensor.
-
- Possession, use, or execution of this software without such signed paper
- license constitutes willful infringement and theft. Electronic signatures,
- scans, digital acknowledgments, or receipts do not create a license.
-
- All rights reserved. Unauthorized use is prohibited.
-
 """  # L010
 
 import os  # L011
@@ -59,6 +46,7 @@ try:
 except ImportError:
     keyring = None  # L041
 
+
 # ───────── Logger (line-numbered) ─────────  # L043
 def _setup_logger() -> logging.Logger:  # L044
     lg = logging.getLogger("gnoman")  # L045
@@ -74,6 +62,7 @@ def _setup_logger() -> logging.Logger:  # L044
     return lg  # L055
 
 logger = _setup_logger()  # L057
+
 
 # ───────── Splash  ─────────  # L059
 def splash() -> None:  # L050
@@ -96,6 +85,8 @@ def splash() -> None:  # L050
     logger.info("Licensed under GNOMAN License (see LICENSE.md)")  # log license
 
 splash()  # L074
+
+
 # ───────── Forensic Ledger (tamper-evident JSONL) ─────────  # L100
 AUDIT_FILE = Path("gnoman_audit.jsonl")  # L101
 AUDIT_HMAC_KEY_ENV = "AUDIT_HMAC_KEY"    # L102
@@ -154,6 +145,8 @@ def audit_log(action: str, params: Dict[str, Any], ok: bool, result: Dict[str, A
         out["hmac"] = _calc_record_hmac(hkey, out)
     with AUDIT_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(out, ensure_ascii=False) + "\n")
+
+
 # ───────── Secrets & .env.secure helpers ─────────  # L170
 ENV_SECURE_PATH = Path(".env.secure")  # L171
 _SERVICE_NAME: Optional[str] = None    # L172
@@ -213,6 +206,7 @@ def _set_secret(key: str, value: str) -> None:  # L221
         except Exception: pass
     _env_secure_write(key, value)
 
+
 # ───────── Web3 bootstrap (retry until connected, no surprise exit) ─────────  # L227
 
 def _init_web3() -> Web3:  # L228
@@ -235,6 +229,7 @@ def _init_web3() -> Web3:  # L228
 
 w3 = _init_web3()  # L250
 
+
 # ───────── 24h Hold (local) ─────────  # L260
 HOLD_FILE = Path("safe_hold.json")  # L261
 def _hold_load() -> Dict[str, Any]:
@@ -243,6 +238,7 @@ def _hold_load() -> Dict[str, Any]:
     except Exception: return {}
 def _hold_save(d: Dict[str, Any]) -> None:
     HOLD_FILE.write_text(json.dumps(d, indent=2))
+
 
 # ───────── Safe Context ─────────  # L271
 class SafeCtx:
@@ -461,10 +457,14 @@ def safe_exec() -> None:
         audit_log("safe_exec", {"to": to_addr, "value": value, "op": op}, True, {"hash32": "0x"+HexBytes(txh).hex()})
 
 
-# ───────── Wallet Manager (HD + hidden tree) ─────────  # L480
+# ───────── Wallet Manager (HD + hidden tree + mnemonic gen) ─────────  # L480
+from mnemonic import Mnemonic
+from hashlib import pbkdf2_hmac
+
 class WalletCtx:
     def __init__(self) -> None:
         self.mnemonic: Optional[str] = None
+        self.passphrase: str = ""
         self.default_path = "m/44'/60'/0'/0/0"
         self.hidden_root = "m/44'/60'/1337'/0"
         self.discovered: List[Tuple[str, str]] = []
@@ -476,6 +476,20 @@ class WalletCtx:
 
 WAL = WalletCtx()
 
+def wal_generate_mnemonic() -> None:
+    print("Select word count (12/15/18/21/24): ", end="")
+    wc = int(input().strip() or "24")
+    strength_map = {12: 128, 15: 160, 18: 192, 21: 224, 24: 256}
+    if wc not in strength_map:
+        print("❌ Invalid choice."); return
+    mnemo = Mnemonic("english")
+    phrase = mnemo.generate(strength=strength_map[wc])
+    WAL.mnemonic = phrase
+    _set_secret("WALLET_MNEMONIC", phrase)
+    print("\n⚠️ WRITE THIS DOWN SAFELY (displayed once):\n")
+    print(phrase + "\n")
+    audit_log("wallet_generate_mnemonic", {"words": wc}, True, {})
+
 def wal_import_mnemonic() -> None:
     phrase = getpass.getpass("Enter mnemonic: ").strip()
     if not phrase: print("❌ Empty mnemonic."); return
@@ -485,10 +499,26 @@ def wal_import_mnemonic() -> None:
     print(f"✅ Default acct0 = {addr}")
     audit_log("wallet_import_mnemonic", {}, True, {"acct0": addr})
 
+def wal_set_passphrase() -> None:
+    p = getpass.getpass("Enter passphrase (empty for none): ").strip()
+    WAL.passphrase = p
+    if p: print("🕳️ Hidden wallet tree enabled.")
+    else: print("Passphrase cleared.")
+    audit_log("wallet_set_passphrase", {"enabled": bool(p)}, True, {})
+
+def _mnemonic_to_seed(mnemonic: str, passphrase: str="") -> bytes:
+    return pbkdf2_hmac(
+        "sha512",
+        mnemonic.encode("utf-8"),
+        ("mnemonic" + passphrase).encode("utf-8"),
+        2048,
+        dklen=64,
+    )
+
 def wal_derive(path: str) -> Tuple[str, Optional[LocalAccount]]:
     if not WAL.mnemonic: return ("", None)
     try:
-        acct = Account.from_mnemonic(WAL.mnemonic, account_path=path)  # type: ignore
+        acct = Account.from_mnemonic(WAL.mnemonic, account_path=path, passphrase=WAL.passphrase)  # type: ignore
         return (_cs(acct.address), acct)
     except Exception as e:
         logger.error(f"derive failed: {e}", exc_info=True)
@@ -522,6 +552,20 @@ def wal_label() -> None:
     WAL.label_file.write_text(json.dumps(WAL.labels, indent=2))
     print(f"🏷️ {addr} => {label}")
     audit_log("wallet_label", {"addr": addr, "label": label}, True, {})
+
+def wal_preview() -> None:
+    if not WAL.mnemonic:
+        print("❌ No mnemonic loaded. Import or generate first.")
+        audit_log("wallet_preview", {}, False, {"error": "no_mnemonic"})
+        return
+    path = input("Enter derivation path (default m/44'/60'/0'/0/0): ").strip() or WAL.default_path
+    addr, _ = wal_derive(path)
+    if addr:
+        print(f"👁 {path} -> {addr}")
+        audit_log("wallet_preview", {"path": path}, True, {"address": addr})
+    else:
+        print("❌ Failed to derive address.")
+        audit_log("wallet_preview", {"path": path}, False, {"error": "derive_failed"})
 
 
 # ───────── Key Manager ─────────  # L560
@@ -593,13 +637,13 @@ License        : Proprietary (see LICENSE.md)
 
 Terms
 -----
-- You may use GNOMAN only with explicit permission of the author.
-- Redistribution, modification, or resale without permission is forbidden.
-- GNOMAN is provided "AS IS" without warranty of any kind.
-- "GNOMAN" is a proprietary trademark of Christopher Hirschauer.
+ You may use GNOMAN only with explicit permission of the author.
+ Redistribution, modification, or resale without permission is forbidden.
+ GNOMAN is provided "AS IS" without warranty of any kind.
+ "GNOMAN" is a proprietary trademark of Christopher Hirschauer.
 
 For permissions or commercial licensing, contact:
-Christopher Hirschauer — Fort Dodge, Iowa, USA
+Christopher Hirschauer — Sioux City Iowa, USA
 """
     print(text)
 
@@ -664,28 +708,34 @@ def wallet_menu() -> None:
         WAL.mnemonic = seed
     while True:
         print("\n┌─ WALLET MANAGER ─────────────────────────────────────────")
-        print("│ 1) Import mnemonic")
-        print("│ 2) Scan default accounts")
-        print("│ 3) Scan hidden HD tree")
-        print("│ 4) Derive specific path")
-        print("│ 5) Export discovered addresses")
-        print("│ 6) Label address")
+        print("│ 1) Generate new mnemonic")
+        print("│ 2) Import mnemonic")
+        print("│ 3) Set/clear passphrase (hidden tree)")
+        print("│ 4) Preview address (any path)")
+        print("│ 5) Scan default accounts")
+        print("│ 6) Scan hidden HD tree")
+        print("│ 7) Derive specific path")
+        print("│ 8) Export discovered addresses")
+        print("│ 9) Label address")
         print("│ 0) Back")
         print("└──────────────────────────────────────────────────────────")
         ch = input("> ").strip()
         try:
-            if ch == "1": wal_import_mnemonic()
-            elif ch == "2":
+            if ch == "1": wal_generate_mnemonic()
+            elif ch == "2": wal_import_mnemonic()
+            elif ch == "3": wal_set_passphrase()
+            elif ch == "4": wal_preview()
+            elif ch == "5":
                 n = int(input("How many accounts (default=5): ").strip() or "5")
                 wal_scan(n, hidden=False)
-            elif ch == "3":
+            elif ch == "6":
                 n = int(input("How many hidden accounts (default=5): ").strip() or "5")
                 wal_scan(n, hidden=True)
-            elif ch == "4":
+            elif ch == "7":
                 path = input("Path (e.g., m/44'/60'/0'/0/1): ").strip()
                 a,_ = wal_derive(path); print(f"{path} -> {a}")
-            elif ch == "5": wal_export_discovered()
-            elif ch == "6": wal_label()
+            elif ch == "8": wal_export_discovered()
+            elif ch == "9": wal_label()
             elif ch == "0": return
             else: print("Invalid.")
         except KeyboardInterrupt:
@@ -694,6 +744,7 @@ def wallet_menu() -> None:
             logger.error(f"Wallet menu error: {e}", exc_info=True)
             audit_log("wallet_menu_error", {"choice": ch}, False, {"error": str(e)})
             print(f"Error: {e}. See gnoman.log.")
+
 
 def key_manager_menu() -> None:
     while True:
@@ -735,7 +786,7 @@ def main_menu() -> None:  # L496
             if ch == "1":
                 safe_menu()
             elif ch == "2":
-                wal_menu()
+                wallet_menu()
             elif ch == "3":
                 key_manager_menu()
             elif ch == "4":
