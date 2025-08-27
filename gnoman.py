@@ -5,9 +5,9 @@ GNOMAN — Gnosis + Manager
 Standalone CLI for:
 - Gnosis Safe (admin + exec + 24h hold toggle)
 - Wallets (HD + hidden tree; import/export/derive/mnemonic)
-- Key Manager (keyring + .env.secure mirror)
+- Key Manager (keyring only)
 Forensic logging: local, append-only JSONL with hash chaining.
-Secrets priority: keyring > .env.secure > env > prompt → persist to keyring + .env.secure.
+Secrets priority: keyring > env > prompt → persist only to .env.
  GNOMAN — Proprietary Software
  Copyright (c) 2025 Christopher Hirschauer
 
@@ -102,8 +102,7 @@ splash()  # L088
 # ───────── Forensic Ledger (tamper-evident JSONL) ─────────  # L089
 AUDIT_FILE = Path("gnoman_audit.jsonl")  # L090
 AUDIT_HMAC_KEY_ENV = "AUDIT_HMAC_KEY"    # L091
-
-def _load_last_hash() -> str:  # L092
+def _load_last_hash() -> str:  # L101
     if not AUDIT_FILE.exists(): return ""
     try:
         with AUDIT_FILE.open("rb") as f:
@@ -120,7 +119,7 @@ def _load_last_hash() -> str:  # L092
     except Exception:
         return ""
 
-def _get_hmac_key() -> Optional[bytes]:  # L110
+def _get_hmac_key() -> Optional[bytes]:  # L121
     key = None
     if keyring:
         try:
@@ -128,18 +127,18 @@ def _get_hmac_key() -> Optional[bytes]:  # L110
         except Exception:
             key = None
     if not key:
-        key = _env_secure_load().get(AUDIT_HMAC_KEY_ENV) or os.getenv(AUDIT_HMAC_KEY_ENV)
+        key = os.getenv(AUDIT_HMAC_KEY_ENV)
     return key.encode("utf-8") if key else None
 
-def _calc_record_hash(prev_hash: str, payload: Dict[str, Any]) -> str:  # L121
+def _calc_record_hash(prev_hash: str, payload: Dict[str, Any]) -> str:  # L133
     body = json.dumps({"prev": prev_hash, **payload}, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return hashlib.sha256(body).hexdigest()
 
-def _calc_record_hmac(hmac_key: bytes, payload_with_hash: Dict[str, Any]) -> str:  # L125
+def _calc_record_hmac(hmac_key: bytes, payload_with_hash: Dict[str, Any]) -> str:  # L137
     body = json.dumps(payload_with_hash, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return hmac.new(hmac_key, body, hashlib.sha256).hexdigest()
 
-def audit_log(action: str, params: Dict[str, Any], ok: bool, result: Dict[str, Any]) -> None:  # L130
+def audit_log(action: str, params: Dict[str, Any], ok: bool, result: Dict[str, Any]) -> None:  # L142
     rec = {
         "ts": time.time(),
         "action": action,
@@ -157,43 +156,23 @@ def audit_log(action: str, params: Dict[str, Any], ok: bool, result: Dict[str, A
         f.write(json.dumps(out, ensure_ascii=False) + "\n")
 
 
-# ───────── Secrets & .env.secure helpers ─────────  # L171
-ENV_SECURE_PATH = Path(".env.secure")  # L172
-_SERVICE_NAME: Optional[str] = None    # L173
+# ───────── Secrets & Keyring helpers ─────────  # L161
+_SERVICE_NAME: Optional[str] = None    # L162
 
-def _service_name() -> str:  # L174
+def _service_name() -> str:  # L163
     global _SERVICE_NAME
     if _SERVICE_NAME: return _SERVICE_NAME
     s = input("Enter keyring service name [default=gnoman]: ").strip() or "gnoman"
     _SERVICE_NAME = s
     return s
 
-def _env_secure_load() -> Dict[str, str]:  # L181
-    if not ENV_SECURE_PATH.exists(): return {}
-    try:
-        lines = ENV_SECURE_PATH.read_text().splitlines()
-        pairs = [l.split("=",1) for l in lines if "=" in l]
-        return {k: v for k, v in pairs}
-    except Exception as e:
-        logger.error(f"❌ .env.secure read failed: {e}", exc_info=True)
-        return {}
-
-def _env_secure_write(key: str, value: str) -> None:  # L192
-    envs = _env_secure_load(); envs[key] = value
-    ENV_SECURE_PATH.write_text("\n".join(f"{k}={v}" for k,v in envs.items()) + "\n")
-    try: ENV_SECURE_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except Exception as e: logger.warning(f"⚠️ chmod .env.secure: {e}")
-    logger.info(f"💾 Wrote {key} to .env.secure")
-
-def _get_secret(key: str, prompt_text: Optional[str]=None, sensitive: bool=True) -> str:  # L200
+def _get_secret(key: str, prompt_text: Optional[str]=None, sensitive: bool=True) -> str:  # L170
     if keyring:
         try:
             v = keyring.get_password(_service_name(), key)
             if v: return v
         except Exception:
             pass
-    v = _env_secure_load().get(key)
-    if v: return v
     v = os.getenv(key)
     if v: return v
     if prompt_text:
@@ -202,20 +181,30 @@ def _get_secret(key: str, prompt_text: Optional[str]=None, sensitive: bool=True)
             if keyring:
                 try: keyring.set_password(_service_name(), key, entered)
                 except Exception: pass
-            _env_secure_write(key, entered)
             return entered
     raise RuntimeError(f"Missing required secret: {key}")
 
-def _set_secret(key: str, value: str) -> None:  # L221
+def _set_secret(key: str, value: str) -> None:  # L188
     if keyring:
         try: keyring.set_password(_service_name(), key, value)
         except Exception: pass
-    _env_secure_write(key, value)
+
+def _env_load() -> Dict[str, str]:
+    """Load values from .env (flat key=value)."""
+    path = Path(".env")
+    if not path.exists():
+        return {}
+    try:
+        lines = path.read_text().splitlines()
+        pairs = [l.split("=", 1) for l in lines if "=" in l]
+        return {k: v for k, v in pairs}
+    except Exception as e:
+        logger.error(f"❌ .env read failed: {e}", exc_info=True)
+        return {}
 
 
-# ───────── Web3 bootstrap (retry until connected, no surprise exit) ─────────  # L228
-def _init_web3() -> Web3:  # L229
-    load_dotenv(".env"); load_dotenv(".env.secure")
+# ───────── Web3 bootstrap (retry until connected) ─────────  # L201
+def _init_web3() -> Web3:  # L202
     while True:
         try:
             rpc = _get_secret("RPC_URL", "Enter RPC_URL: ", sensitive=False)
@@ -232,20 +221,23 @@ def _init_web3() -> Web3:  # L229
         print("❌ Could not connect to RPC. Enter a different URL.")
         audit_log("web3_connect", {"rpc": rpc[:12]+"…"}, False, {"error": "connect_failed"})
 
-w3 = _init_web3()  # L250
+w3 = _init_web3()  # L221
 
 
-# ───────── 24h Hold (local) ─────────  # L260
-HOLD_FILE = Path("safe_hold.json")  # L261
-def _hold_load() -> Dict[str, Any]:
+# ───────── 24h Hold (local persistence) ─────────  # L225
+HOLD_FILE = Path("safe_hold.json")  # L226
+
+def _hold_load() -> Dict[str, Any]:  # L228
     if not HOLD_FILE.exists(): return {}
     try: return json.loads(HOLD_FILE.read_text())
     except Exception: return {}
-def _hold_save(d: Dict[str, Any]) -> None:
+
+def _hold_save(d: Dict[str, Any]) -> None:  # L234
     HOLD_FILE.write_text(json.dumps(d, indent=2))
 
-# ───────── Safe Context ─────────  # L271
-class SafeCtx:
+
+# ───────── Safe Context ─────────  # L238
+class SafeCtx:  # L239
     def __init__(self) -> None:
         self.addr: Optional[str] = None
         self.contract = None
@@ -255,12 +247,12 @@ class SafeCtx:
         self.prepared: Dict[str,Any] = {}
         self.hold = _hold_load()
 
-SAFE = SafeCtx()  # L285
+SAFE = SafeCtx()  # L250
 
-def _cs(addr: str) -> str: 
-    return Web3.to_checksum_address(addr)  # L287
+def _cs(addr: str) -> str:  # L253
+    return Web3.to_checksum_address(addr)
 
-def safe_init() -> None:  # L301
+def safe_init() -> None:  # L256
     if SAFE.contract and SAFE.addr: return
     try:
         saddr = _get_secret("GNOSIS_SAFE", "Enter Safe address: ", sensitive=False)
@@ -280,20 +272,18 @@ def safe_init() -> None:  # L301
     SAFE.threshold = SAFE.contract.functions.getThreshold().call()
     logger.info(f"🔧 SAFE initialized | address={SAFE.addr} | owners={len(SAFE.owners)} | threshold={SAFE.threshold}")
     audit_log("safe_init", {"safe": SAFE.addr, "owners": SAFE.owners, "threshold": SAFE.threshold}, True, {})
+# ───────── Delegate Registry (mapping owner->delegates) ─────────  # L301
+DELEGATE_FILE = Path("safe_delegates.json")  # L302
 
-
-# ───────── Delegate Registry (mapping owner->delegates) ─────────  # L325
-DELEGATE_FILE = Path("safe_delegates.json")
-
-def _delegate_load() -> Dict[str,List[str]]:
+def _delegate_load() -> Dict[str,List[str]]:  # L304
     if not DELEGATE_FILE.exists(): return {}
     try: return json.loads(DELEGATE_FILE.read_text())
     except Exception: return {}
 
-def _delegate_save(d: Dict[str,List[str]]) -> None:
+def _delegate_save(d: Dict[str,List[str]]) -> None:  # L310
     DELEGATE_FILE.write_text(json.dumps(d, indent=2))
 
-def safe_add_delegate() -> None:  # map delegate to owner
+def safe_add_delegate() -> None:  # map delegate to owner  # L313
     owner = input("Owner address: ").strip()
     delegate = input("Delegate address: ").strip()
     try: o = _cs(owner); d = _cs(delegate)
@@ -305,17 +295,37 @@ def safe_add_delegate() -> None:  # map delegate to owner
     print(f"🗝 Delegate {d} added for owner {o}")
     audit_log("delegate_add", {"owner": o, "delegate": d}, True, {})
 
-def safe_list_delegates() -> None:
+def safe_remove_delegate() -> None:  # remove delegate  # L326
+    owner = input("Owner address: ").strip()
+    delegate = input("Delegate to remove: ").strip()
+    try: o = _cs(owner); d = _cs(delegate)
+    except Exception: print("Invalid address."); return
     reg = _delegate_load()
+    if o in reg and d in reg[o]:
+        reg[o].remove(d)
+        _delegate_save(reg)
+        print(f"🗑 Removed delegate {d} from {o}")
+        audit_log("delegate_remove", {"owner": o, "delegate": d}, True, {})
+    else:
+        print("Delegate not found.")
+        audit_log("delegate_remove", {"owner": o, "delegate": d}, False, {"error": "not_found"})
+
+def safe_list_delegates() -> None:  # L342
+    reg = _delegate_load()
+    if not reg:
+        print("No delegates recorded.")
+        return
     for owner, dels in reg.items():
         print(f"{owner}:")
         for d in dels: print(f"  - {d}")
     audit_log("delegate_list", {}, True, {"count": len(reg)})
 
-def _safe_nonce() -> int:  # L401
+
+# ───────── Safe helpers ─────────  # L353
+def _safe_nonce() -> int:  # L354
     return SAFE.contract.functions.nonce().call()
 
-def _apply_24h_hold() -> bool:  # L405
+def _apply_24h_hold() -> bool:  # L357
     key = f"{SAFE.addr}:{_safe_nonce()}"
     now = int(time.time())
     hold_until = int(SAFE.hold.get(key, 0))
@@ -332,7 +342,7 @@ def _apply_24h_hold() -> bool:  # L405
         return False
     return True
 
-def _send_tx(tx: Dict[str, Any]) -> Optional[str]:  # L421
+def _send_tx(tx: Dict[str, Any]) -> Optional[str]:  # L374
     try:
         tx.setdefault("chainId", int(os.getenv("CHAIN_ID","1") or "1"))
         tx.setdefault("nonce", w3.eth.get_transaction_count(SAFE.owners[0]))
@@ -346,7 +356,6 @@ def _send_tx(tx: Dict[str, Any]) -> Optional[str]:  # L421
                 tx["gas"] = int(est) + 100000
             except Exception:
                 tx["gas"] = 800000
-        # NOTE: This is relayer broadcast; GNOMAN itself doesn't sign with Safe keys
         txh = w3.eth.send_transaction(tx)
         rcpt = w3.eth.wait_for_transaction_receipt(txh)
         ok = (rcpt.status == 1)
@@ -358,21 +367,22 @@ def _send_tx(tx: Dict[str, Any]) -> Optional[str]:  # L421
         print(f"❌ Transaction failed: {e}")
         audit_log("send_tx", {"to": tx.get("to")}, False, {"error": str(e)})
         return None
-
-def safe_assert_owner(addr: str) -> None:  # L450
+def safe_assert_owner(addr: str) -> None:  # L401
     if _cs(addr) not in SAFE.owners:
         raise Exception(f"{addr} is not a Safe owner.")
 
-def safe_add_owner() -> None:  # L455
+def safe_add_owner() -> None:  # L405
     addr = input("New owner address: ").strip()
     try: a = _cs(addr)
     except Exception: print("Invalid address."); return
     thr = SAFE.contract.functions.getThreshold().call()
     data = SAFE.contract.encodeABI(fn_name="addOwnerWithThreshold", args=[a, thr])
     tx = {"to": SAFE.addr, "value": 0, "data": Web3.to_bytes(hexstr=data)}
-    if _apply_24h_hold(): _send_tx(tx); audit_log("owner_add", {"owner": a}, True, {})
+    if _apply_24h_hold(): 
+        _send_tx(tx)
+        audit_log("owner_add", {"owner": a}, True, {})
 
-def safe_remove_owner() -> None:  # L466
+def safe_remove_owner() -> None:  # L417
     rm = input("Owner to remove: ").strip()
     prev = input("Prev owner (linked-list): ").strip()
     try: rm_cs = _cs(rm); prev_cs = _cs(prev)
@@ -380,17 +390,21 @@ def safe_remove_owner() -> None:  # L466
     thr = SAFE.contract.functions.getThreshold().call()
     data = SAFE.contract.encodeABI(fn_name="removeOwner", args=[prev_cs, rm_cs, thr])
     tx = {"to": SAFE.addr, "value": 0, "data": Web3.to_bytes(hexstr=data)}
-    if _apply_24h_hold(): _send_tx(tx); audit_log("owner_remove", {"owner": rm_cs, "prev": prev_cs}, True, {})
+    if _apply_24h_hold(): 
+        _send_tx(tx)
+        audit_log("owner_remove", {"owner": rm_cs, "prev": prev_cs}, True, {})
 
-def safe_change_threshold() -> None:  # L478
+def safe_change_threshold() -> None:  # L430
     val = input("New threshold (>0): ").strip()
     try: thr = int(val); assert thr > 0
     except Exception: print("Invalid threshold."); return
     data = SAFE.contract.encodeABI(fn_name="changeThreshold", args=[thr])
     tx = {"to": SAFE.addr, "value": 0, "data": Web3.to_bytes(hexstr=data)}
-    if _apply_24h_hold(): _send_tx(tx); audit_log("threshold_change", {"threshold": thr}, True, {})
+    if _apply_24h_hold(): 
+        _send_tx(tx)
+        audit_log("threshold_change", {"threshold": thr}, True, {})
 
-def safe_exec_tx(to_addr: str, value: int, data: bytes, op: int=0) -> None:  # L501
+def safe_exec_tx(to_addr: str, value: int, data: bytes, op: int=0) -> None:  # L442
     if not SAFE.contract: safe_init()
     nonce = _safe_nonce()
     txh = SAFE.contract.functions.getTransactionHash(
@@ -406,7 +420,9 @@ def safe_exec_tx(to_addr: str, value: int, data: bytes, op: int=0) -> None:  # L
     sigs: List[bytes] = []
     for i in range(needed):
         sighex = input(f"Enter signature {i+1}/{needed} (0x…): ").strip()
-        if not sighex: print("❌ Empty sig"); return
+        if not sighex: 
+            print("❌ Empty sig"); 
+            return
         sigs.append(bytes.fromhex(sighex[2:] if sighex.startswith("0x") else sighex))
 
     packed = b"".join(sigs)
@@ -420,7 +436,7 @@ def safe_exec_tx(to_addr: str, value: int, data: bytes, op: int=0) -> None:  # L
         _send_tx(tx)
         audit_log("safe_exec", {"to": to_addr, "value": value, "op": op}, True, {"hash32": txh.hex()})
 
-def safe_show_info() -> None:  # L535
+def safe_show_info() -> None:  # L478
     owners = SAFE.owners
     threshold = SAFE.threshold
     nonce = _safe_nonce()
@@ -428,38 +444,48 @@ def safe_show_info() -> None:  # L535
     out = {"safe": SAFE.addr, "owners": owners, "threshold": threshold, "nonce": nonce, "eth_balance": str(eth)}
     print(json.dumps(out, indent=2))
     audit_log("safe_info", {}, True, out)
-
-def safe_fund_eth() -> None:  # L545
+def safe_fund_eth() -> None:  # L501
     amt = input("Amount ETH to send to Safe: ").strip()
     try: v = Decimal(amt)
-    except Exception: print("Invalid amount."); return
+    except Exception: 
+        print("Invalid amount."); 
+        return
     tx = {"to": SAFE.addr, "value": int(Web3.to_wei(v, "ether")), "data": b""}
-    if _apply_24h_hold(): _send_tx(tx)
+    if _apply_24h_hold(): 
+        _send_tx(tx)
 
-def safe_send_erc20() -> None:  # L555
+def safe_send_erc20() -> None:  # L511
     token_addr = input("ERC20 token address: ").strip()
     try: token = w3.eth.contract(address=_cs(token_addr), abi=ERC20_ABI_MIN)
-    except Exception: print("Invalid token."); return
+    except Exception: 
+        print("Invalid token."); 
+        return
     try: sym = token.functions.symbol().call()
     except Exception: sym = "UNKNOWN"
     try: dec = token.functions.decimals().call()
     except Exception: dec = 18
     amt = input(f"Amount of {sym}: ").strip()
     try: v = Decimal(amt)
-    except Exception: print("Invalid amount."); return
+    except Exception: 
+        print("Invalid amount."); 
+        return
     raw = int(v * (10 ** dec))
     data = token.encodeABI(fn_name="transfer", args=[SAFE.addr, raw])
     tx = {"to": token.address, "value": 0, "data": Web3.to_bytes(hexstr=data)}
-    if _apply_24h_hold(): _send_tx(tx)
+    if _apply_24h_hold(): 
+        _send_tx(tx)
 
-def safe_toggle_guard(enable: bool) -> None:  # L580
+def safe_toggle_guard(enable: bool) -> None:  # L533
     if enable:
         guard_addr = _get_secret("SAFE_DELAY_GUARD", "Enter DelayGuard address: ", sensitive=False)
         try: g = _cs(guard_addr)
-        except Exception: print("Invalid address."); return
+        except Exception: 
+            print("Invalid address."); 
+            return
         data = SAFE.contract.encodeABI(fn_name="setGuard", args=[g])
         tx = {"to": SAFE.addr, "value": 0, "data": Web3.to_bytes(hexstr=data)}
-        _send_tx(tx); _set_secret("SAFE_DELAY_GUARD", g)
+        _send_tx(tx)
+        _set_secret("SAFE_DELAY_GUARD", g)
         print(f"🛡 Guard enabled at {g}")
         audit_log("guard_enable", {"guard": g}, True, {})
     else:
@@ -470,7 +496,7 @@ def safe_toggle_guard(enable: bool) -> None:  # L580
         print("🛡 Guard disabled.")
         audit_log("guard_disable", {}, True, {})
 
-def safe_show_guard() -> None:  # L597
+def safe_show_guard() -> None:  # L555
     try:
         g = SAFE.contract.functions.getGuard().call()
         active = int(g,16) != 0
@@ -480,8 +506,6 @@ def safe_show_guard() -> None:  # L597
     except Exception as e:
         print(f"❌ getGuard failed: {e}")
         audit_log("guard_show", {}, False, {"error": str(e)})
-
-
 # ───────── Wallet Manager (HD + hidden tree, mnemonic, passphrase, preview) ─────────  # L601
 class WalletCtx:
     def __init__(self) -> None:
@@ -493,8 +517,10 @@ class WalletCtx:
         self.labels: Dict[str, str] = {}
         self.label_file = Path("wallet_labels.json")
         if self.label_file.exists():
-            try: self.labels = json.loads(self.label_file.read_text())
-            except Exception: self.labels = {}
+            try: 
+                self.labels = json.loads(self.label_file.read_text())
+            except Exception: 
+                self.labels = {}
 
 WAL = WalletCtx()
 
@@ -511,7 +537,8 @@ def wal_generate_mnemonic() -> None:  # L617
 def wal_import_mnemonic() -> None:  # L627
     phrase = getpass.getpass("Enter mnemonic: ").strip()
     if not phrase: 
-        print("❌ Empty mnemonic."); return
+        print("❌ Empty mnemonic."); 
+        return
     WAL.mnemonic = phrase
     _set_secret("WALLET_MNEMONIC", phrase)
     addr, _ = wal_derive(WAL.default_path)
@@ -532,12 +559,15 @@ def wal_set_passphrase() -> None:  # L637
 def wal_preview() -> None:  # L648
     path = input("Enter derivation path (e.g., m/44'/60'/0'/0/0): ").strip()
     addr, _ = wal_derive(path)
-    if addr: print(f"{path} -> {addr}")
-    else: print("❌ Failed to derive.")
+    if addr: 
+        print(f"{path} -> {addr}")
+    else: 
+        print("❌ Failed to derive.")
     audit_log("wallet_preview", {"path": path}, bool(addr), {"addr": addr})
 
 def wal_derive(path: str) -> Tuple[str, Optional[LocalAccount]]:  # L656
-    if not WAL.mnemonic: return ("", None)
+    if not WAL.mnemonic: 
+        return ("", None)
     try:
         acct = Account.from_mnemonic(WAL.mnemonic, account_path=path, passphrase=WAL.passphrase)  # type: ignore
         return (_cs(acct.address), acct)
@@ -552,22 +582,29 @@ def wal_scan(n: int, hidden: bool=False) -> None:  # L666
     for i in range(n):
         path = f"{base}/{i}"
         addr, _ = wal_derive(path)
-        if addr: out.append((path, addr))
+        if addr: 
+            out.append((path, addr))
     WAL.discovered = out
     print(f"🔍 Scanned {n} ({'hidden' if hidden else 'default'})")
-    for p,a in out: print(f"  {p} -> {a}")
+    for p,a in out: 
+        print(f"  {p} -> {a}")
     audit_log("wallet_scan", {"hidden": hidden, "n": n}, True, {"count": len(out)})
-
-def wal_export_discovered() -> None:  # L678
-    data = {"mnemonic_present": WAL.mnemonic is not None,
-            "discovered": [{"path": p, "address": a, "label": WAL.labels.get(a,"")} for p,a in WAL.discovered]}
+def wal_export_discovered() -> None:  # L701
+    data = {
+        "mnemonic_present": WAL.mnemonic is not None,
+        "discovered": [
+            {"path": p, "address": a, "label": WAL.labels.get(a,"")} 
+            for p,a in WAL.discovered
+        ]
+    }
     Path("wallet_export.json").write_text(json.dumps(data, indent=2))
     print("📤 Exported -> wallet_export.json")
     audit_log("wallet_export", {}, True, {"file": "wallet_export.json"})
 
-def wal_label() -> None:  # L687
+def wal_label() -> None:  # L713
     addr = input("Address to label: ").strip()
-    if not addr: return
+    if not addr: 
+        return
     label = input("Label: ").strip()
     WAL.labels[addr] = label
     WAL.label_file.write_text(json.dumps(WAL.labels, indent=2))
@@ -575,27 +612,34 @@ def wal_label() -> None:  # L687
     audit_log("wallet_label", {"addr": addr, "label": label}, True, {})
 
 
-# ───────── Key Manager ─────────  # L721
+# ───────── Key Manager ─────────  # L730
 def km_add() -> None:
     key = input("Secret key (e.g., RPC_URL): ").strip()
-    if not key: print("Empty."); return
+    if not key: 
+        print("Empty."); 
+        return
     val = getpass.getpass(f"Enter value for {key}: ").strip()
-    if not val: print("Empty."); return
+    if not val: 
+        print("Empty."); 
+        return
     if keyring:
-        try: keyring.set_password(_service_name(), key, val)
-        except Exception as e: logger.error(f"keyring set: {e}", exc_info=True)
-    _env_secure_write(key, val)
-    print("✅ Stored to keyring + .env.secure")
+        try: 
+            keyring.set_password(_service_name(), key, val)
+        except Exception as e: 
+            logger.error(f"keyring set: {e}", exc_info=True)
+    print("✅ Stored in keyring")
     audit_log("km_set", {"key": key}, True, {})
 
 def km_get() -> None:
     key = input("Secret key: ").strip()
-    if not key: return
+    if not key: 
+        return
     val = None
     if keyring:
-        try: val = keyring.get_password(_service_name(), key)
-        except Exception: val = None
-    if not val: val = _env_secure_load().get(key) or os.getenv(key)
+        try: 
+            val = keyring.get_password(_service_name(), key)
+        except Exception: 
+            val = None
     if val:
         print(f"{key} = {val}")
         audit_log("km_get", {"key": key}, True, {"found": True})
@@ -605,42 +649,47 @@ def km_get() -> None:
 
 def km_del() -> None:
     key = input("Secret key to delete: ").strip()
-    if not key: return
+    if not key: 
+        return
     ok = True
     if keyring:
-        try: keyring.delete_password(_service_name(), key)
-        except Exception: ok = False
+        try: 
+            keyring.delete_password(_service_name(), key)
+        except Exception: 
+            ok = False
     print("✅ Deleted from keyring (if present).")
     audit_log("km_del", {"key": key}, ok, {})
 
-def km_list_env() -> None:
-    envs = _env_secure_load()
-    if not envs: print("No entries."); return
-    print("=== .env.secure ===")
-    for k,v in envs.items():
-        print(f"{k} = {v[:6]}…")
-    audit_log("km_list_env", {"count": len(envs)}, True, {})
-
-def km_sync_env() -> None:
-    envs = _env_secure_load()
-    if keyring:
-        for k,v in envs.items():
-            try: keyring.set_password(_service_name(), k, v)
-            except Exception: pass
-    print(f"✅ Synced {len(envs)} into keyring")
-    audit_log("km_sync_env", {"count": len(envs)}, True, {})
-
-
-# ──────────────────────────────────────────────  # L780
-# ABOUT & LICENSE                                # L781
-# ──────────────────────────────────────────────  # L782
+def km_list_keyring() -> None:  # L780
+    if not keyring:
+        print("⚠️ keyring not available")
+        return
+    service = _service_name()
+    print(f"=== keyring entries for service {service} ===")
+    try:
+        # WARNING: some backends cannot enumerate; handle gracefully
+        keys = []
+        try:
+            keys = keyring.get_credential(service, None)  # type: ignore
+        except Exception:
+            pass
+        if not keys:
+            print("No entries visible (backend may not support listing).")
+        else:
+            print(keys)
+    except Exception as e:
+        logger.error(f"km_list_keyring failed: {e}", exc_info=True)
+        print("❌ Failed to list keyring.")
+# ──────────────────────────────────────────────  # L801
+# ABOUT & LICENSE                                # L802
+# ──────────────────────────────────────────────  # L803
 def about_menu() -> None:
     text = """
 GNOMAN — Safe • Wallet • Keys • Hold24h
 ────────────────────────────────────────
 Author & Owner : Christopher Hirschauer
 Copyright      : (c) 2025 All rights reserved.
-License        : Proprietary (see LICENSE.md)
+License        : Proprietary (see LICENSE.md and LICENSEE.md)
 
 Terms
 -----
@@ -654,11 +703,13 @@ Christopher Hirschauer — Fort Dodge, Iowa, USA
 """
     print(text)
 
-def safe_menu() -> None:  # L821
+
+def safe_menu() -> None:  # L827
     try:
         safe_init()
     except Exception as e:
-        print(f"❌ {e}"); return
+        print(f"❌ {e}"); 
+        return
     while True:
         print("\n┌─ SAFE MANAGER ───────────────────────────────────────────")
         print("│ 1) Show Safe info")
@@ -669,38 +720,59 @@ def safe_menu() -> None:  # L821
         print("│ 6) Admin: Remove owner")
         print("│ 7) Admin: Change threshold")
         print("│ 8) Delegates: Add")
-        print("│ 9) Delegates: List")
-        print("│ 10) Guard: Show")
-        print("│ 11) Guard: Enable (setGuard)")
-        print("│ 12) Guard: Disable")
+        print("│ 9) Delegates: Remove")
+        print("│ 10) Delegates: List")
+        print("│ 11) Guard: Show")
+        print("│ 12) Guard: Enable (setGuard)")
+        print("│ 13) Guard: Disable")
         print("│ 0) Back")
         print("└──────────────────────────────────────────────────────────")
         ch = input("> ").strip()
         try:
-            if ch == "1": safe_show_info()
-            elif ch == "2": safe_fund_eth()
-            elif ch == "3": safe_send_erc20()
+            if ch == "1": 
+                safe_show_info()
+            elif ch == "2": 
+                safe_fund_eth()
+            elif ch == "3": 
+                safe_send_erc20()
             elif ch == "4":
                 to_in = input(" to (target address): ").strip()
-                try: to_addr = _cs(to_in)
-                except Exception: print("Bad address."); continue
+                try: 
+                    to_addr = _cs(to_in)
+                except Exception: 
+                    print("Bad address."); 
+                    continue
                 val = input(" value (ETH, default 0): ").strip()
                 value = int(Web3.to_wei(Decimal(val), "ether")) if val else 0
                 data_hex = input(" data (0x…): ").strip()
                 data = b"" if not data_hex else Web3.to_bytes(hexstr=data_hex)
                 op = int(input(" operation (0=CALL,1=DELEGATECALL; default 0): ").strip() or "0")
-                if op not in (0,1): print("Invalid op"); continue
+                if op not in (0,1): 
+                    print("Invalid op"); 
+                    continue
                 safe_exec_tx(to_addr, value, data, op)
-            elif ch == "5": safe_add_owner()
-            elif ch == "6": safe_remove_owner()
-            elif ch == "7": safe_change_threshold()
-            elif ch == "8": safe_add_delegate()
-            elif ch == "9": safe_list_delegates()
-            elif ch == "10": safe_show_guard()
-            elif ch == "11": safe_toggle_guard(True)
-            elif ch == "12": safe_toggle_guard(False)
-            elif ch == "0": return
-            else: print("Invalid.")
+            elif ch == "5": 
+                safe_add_owner()
+            elif ch == "6": 
+                safe_remove_owner()
+            elif ch == "7": 
+                safe_change_threshold()
+            elif ch == "8": 
+                safe_add_delegate()
+            elif ch == "9": 
+                safe_remove_delegate()
+            elif ch == "10": 
+                safe_list_delegates()
+            elif ch == "11": 
+                safe_show_guard()
+            elif ch == "12": 
+                safe_toggle_guard(True)
+            elif ch == "13": 
+                safe_toggle_guard(False)
+            elif ch == "0": 
+                return
+            else: 
+                print("Invalid.")
         except KeyboardInterrupt:
             print("\n⚠️ Interrupted.")
         except Exception as e:
@@ -708,12 +780,14 @@ def safe_menu() -> None:  # L821
             audit_log("safe_menu_error", {"choice": ch}, False, {"error": str(e)})
             print(f"Error: {e}. See gnoman.log.")
 
-def wallet_menu() -> None:  # L880
+def wallet_menu() -> None:  # L901
     if not WAL.mnemonic:
-        seed = _env_secure_load().get("WALLET_MNEMONIC")
+        seed = _env_load().get("WALLET_MNEMONIC")
         if not seed and keyring:
-            try: seed = keyring.get_password(_service_name(), "WALLET_MNEMONIC")
-            except Exception: seed = None
+            try: 
+                seed = keyring.get_password(_service_name(), "WALLET_MNEMONIC")
+            except Exception: 
+                seed = None
         WAL.mnemonic = seed
     while True:
         print("\n┌─ WALLET MANAGER ─────────────────────────────────────────")
@@ -730,10 +804,14 @@ def wallet_menu() -> None:  # L880
         print("└──────────────────────────────────────────────────────────")
         ch = input("> ").strip()
         try:
-            if ch == "1": wal_generate_mnemonic()
-            elif ch == "2": wal_import_mnemonic()
-            elif ch == "3": wal_set_passphrase()
-            elif ch == "4": wal_preview()
+            if ch == "1": 
+                wal_generate_mnemonic()
+            elif ch == "2": 
+                wal_import_mnemonic()
+            elif ch == "3": 
+                wal_set_passphrase()
+            elif ch == "4": 
+                wal_preview()
             elif ch == "5":
                 n = int(input("How many accounts (default=5): ").strip() or "5")
                 wal_scan(n, hidden=False)
@@ -742,11 +820,16 @@ def wallet_menu() -> None:  # L880
                 wal_scan(n, hidden=True)
             elif ch == "7":
                 path = input("Path (e.g., m/44'/60'/0'/0/1): ").strip()
-                a,_ = wal_derive(path); print(f"{path} -> {a}")
-            elif ch == "8": wal_export_discovered()
-            elif ch == "9": wal_label()
-            elif ch == "0": return
-            else: print("Invalid.")
+                a,_ = wal_derive(path); 
+                print(f"{path} -> {a}")
+            elif ch == "8": 
+                wal_export_discovered()
+            elif ch == "9": 
+                wal_label()
+            elif ch == "0": 
+                return
+            else: 
+                print("Invalid.")
         except KeyboardInterrupt:
             print("\n⚠️ Interrupted.")
         except Exception as e:
@@ -754,25 +837,29 @@ def wallet_menu() -> None:  # L880
             audit_log("wallet_menu_error", {"choice": ch}, False, {"error": str(e)})
             print(f"Error: {e}. See gnoman.log.")
 
-def key_manager_menu() -> None:  # L940
+def key_manager_menu() -> None:  # L960
     while True:
         print("\n┌─ KEY MANAGER ──────────────────────────────────────────")
         print("│ 1) Add/Update secret")
         print("│ 2) Retrieve secret")
         print("│ 3) Delete secret")
-        print("│ 4) List .env.secure entries")
-        print("│ 5) Sync .env.secure → keyring")
+        print("│ 4) List keyring entries")
         print("│ 0) Back")
         print("└─────────────────────────────────────────────────────────")
         ch = input("> ").strip()
         try:
-            if ch == "1": km_add()
-            elif ch == "2": km_get()
-            elif ch == "3": km_del()
-            elif ch == "4": km_list_env()
-            elif ch == "5": km_sync_env()
-            elif ch == "0": return
-            else: print("Invalid.")
+            if ch == "1": 
+                km_add()
+            elif ch == "2": 
+                km_get()
+            elif ch == "3": 
+                km_del()
+            elif ch == "4": 
+                km_list_keyring()
+            elif ch == "0": 
+                return
+            else: 
+                print("Invalid.")
         except KeyboardInterrupt:
             print("\n⚠️ Interrupted.")
         except Exception as e:
@@ -780,7 +867,8 @@ def key_manager_menu() -> None:  # L940
             audit_log("key_menu_error", {"choice": ch}, False, {"error": str(e)})
             print(f"Error: {e}. See gnoman.log.")
 
-def main_menu() -> None:  # L970
+# ───────── Main Menu ─────────  # L1000
+def main_menu() -> None:  # L1001
     while True:
         print("\n┌─ GNOMAN MAIN MENU ──────────────────────────────────────")
         print("│ 1) Safe Manager (Gnosis Safe)")
@@ -791,21 +879,27 @@ def main_menu() -> None:  # L970
         print("└─────────────────────────────────────────────────────────")
         ch = input("> ").strip()
         try:
-            if ch == "1": safe_menu()
-            elif ch == "2": wallet_menu()
-            elif ch == "3": key_manager_menu()
-            elif ch == "4": about_menu()
+            if ch == "1": 
+                safe_menu()
+            elif ch == "2": 
+                wallet_menu()
+            elif ch == "3": 
+                key_manager_menu()
+            elif ch == "4": 
+                about_menu()
             elif ch == "5":
                 print("👋 Goodbye.")
                 return
-            else: print("Invalid.")
+            else: 
+                print("Invalid.")
         except KeyboardInterrupt:
             print("\n⚠️ Interrupted.")
         except Exception as e:
             logger.error(f"💥 Main menu error: {e}", exc_info=True)
             print(f"Error: {e}. See gnoman.log.")
 
-# ───────── Entrypoint ─────────  # L1005
+
+# ───────── Entrypoint ─────────  # L1030
 if __name__ == "__main__":
     try:
         splash()
@@ -813,4 +907,4 @@ if __name__ == "__main__":
     finally:
         logger.info("🧹 gnoman exiting.")
         logging.shutdown()
-# EOF
+# EOF  # L1038
